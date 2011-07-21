@@ -1,0 +1,88 @@
+#!/usr/bin/env perl
+
+use strict;
+use warnings FATAL => 'all';
+
+use Getopt::Long;
+
+sub LOG {
+    my ( $level, $mesg ) = @_;
+    printf STDERR "%s [%s] %s\n", scalar localtime, $level, $mesg;
+}
+
+sub WARN { LOG 'WARN', @_ }
+
+sub INFO { LOG 'INFO', @_ }
+
+sub ERROR { LOG 'ERROR', @_ };
+
+sub LOGDIE { ERROR @_; exit 2 };
+
+{
+    my %tasks;
+
+    sub deftask ($&) {
+        my ( $task, $thunk ) = @_;
+        LOGDIE "Invalid task name '$task' (may only contain alphanumeric, '_', '-', and '.')"
+          unless $task =~ m/^[\w\-.]+$/;
+        $tasks{$task}{thunk} = $thunk;
+    }
+
+    sub tasks {
+        sort keys %tasks;
+    }
+
+    sub runtask {
+        my $task = shift;
+        LOGDIE "No such task '$task'" unless exists $tasks{$task};
+        unless ( $tasks{$task}{has_run} ) {
+            INFO  "Running $task";
+            $tasks{$task}{thunk}->();
+            $tasks{$task}{has_run} = 1;
+        }
+    }
+
+    sub depends {
+        my @dependencies = map { split ',' } @_;
+        runtask($_) for @dependencies;
+    }
+}
+
+sub shell {
+    my $script = shift;
+    open( my $pipe, '|bash -e -x' );
+    print $pipe $script;
+    close $pipe;
+    my $exit_code = $? >> 8;
+    LOGDIE "Shell script exited $exit_code"
+      if $exit_code != 0;
+}
+
+{
+    my $build_file = 'build.pl';
+    our $BASEDIR = '/tmp/foo';
+
+    GetOptions(
+               'build-file=s' => \$build_file,
+               'base-dir=s'   => \$BASEDIR,
+              );
+
+    LOGDIE "$BASEDIR is not writable"
+      unless -w $BASEDIR;
+
+    $build_file = 'build.pl' unless defined $build_file;
+
+    {
+        my $rc = do $build_file;
+        LOGDIE "Couldn't parse $build_file"  if $@;
+        LOGDIE "Couldn't do $build_file: $!" unless defined $rc;
+        LOGDIE "Couldn't run $build_file"    unless $rc;
+    }
+
+    if ( @ARGV ) {
+        runtask $_ for @ARGV;
+    }
+    else {
+        print "Available tasks: \n", map( "  $_\n", tasks() );
+    }
+}
